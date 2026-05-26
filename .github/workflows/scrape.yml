@@ -1,0 +1,38 @@
+# Free-IP-rotation scraper. Each run launches on a fresh GitHub-hosted runner
+# with a different egress IP from GitHub's pool. Public repos = unlimited free
+# minutes. The matrix runs 5 jobs in parallel = 5 different IPs concurrently.
+# Cron every 30 min keeps a steady fill going.
+name: scrape-images
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every 30 minutes
+  workflow_dispatch:          # manual trigger button in the GH UI
+
+# Don't queue overlapping runs (a slow run holding the claim sentinel is fine —
+# it self-clears on exit, but no point piling up).
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # 5 parallel jobs per trigger = 5 fresh IPs concurrently.
+        # Each one is its own runner so they ARE independent.
+        shard: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: scrape one batch
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scraper.py --batch 300 --workers 6
