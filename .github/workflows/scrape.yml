@@ -1,12 +1,12 @@
 # Free-IP-rotation scraper. Each run launches on a fresh GitHub-hosted runner
 # with a different egress IP from GitHub's pool. Public repos = unlimited free
-# minutes. The matrix runs 5 jobs in parallel = 5 different IPs concurrently.
-# Cron every 30 min keeps a steady fill going.
+# minutes. The matrix runs 20 jobs in parallel = 20 different IPs concurrently.
+# Cron every 15 min keeps a steady fill going.
 name: scrape-images
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # every 30 minutes
+    - cron: '*/15 * * * *'   # every 15 minutes
   workflow_dispatch:          # manual trigger button in the GH UI
 
 # Don't queue overlapping runs (a slow run holding the claim sentinel is fine —
@@ -21,10 +21,12 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
+      max-parallel: 20
       matrix:
-        # 5 parallel jobs per trigger = 5 fresh IPs concurrently.
+        # 20 parallel jobs per trigger = 20 fresh IPs concurrently.
         # Each one is its own runner so they ARE independent.
-        shard: [1, 2, 3, 4, 5]
+        # f1-micro DB cap is ~25 connections; we use 1 per shard (workers share).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,4 +37,4 @@ jobs:
       - name: scrape one batch
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python scraper.py --batch 300 --workers 6
+        run: python scraper.py --batch 800 --workers 8
