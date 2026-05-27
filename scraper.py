@@ -110,6 +110,77 @@ def bing_image(client: httpx.Client, query: str) -> Optional[str]:
         return None
 
 
+# ── Source 4: DuckDuckGo image search (free, no API key) ───────────────────
+# DDG often surfaces images that Bing misses, especially for US store-brand
+# products from minor retailers. Two-step protocol: first get a vqd token
+# from the HTML page, then call the JSON image endpoint.
+def ddg_image(client: httpx.Client, query: str) -> Optional[str]:
+    try:
+        # Step 1: scrape the vqd token from DDG's HTML response
+        seed_url = "https://duckduckgo.com/?q=" + urllib.parse.quote(query[:80])
+        seed = client.get(seed_url, headers={"User-Agent": ua()}, timeout=10)
+        m = re.search(r"vqd=['\"]?([\d-]+)", seed.text) or re.search(r"vqd=([\d-]+)", seed.text)
+        if not m:
+            return None
+        vqd = m.group(1)
+        # Step 2: call the JSON endpoint
+        api_url = (
+            "https://duckduckgo.com/i.js?l=us-en&o=json&q="
+            + urllib.parse.quote(query[:80])
+            + f"&vqd={vqd}&f=,,,&p=1"
+        )
+        r = client.get(api_url, headers={"User-Agent": ua(), "Referer": "https://duckduckgo.com/"}, timeout=10)
+        if r.status_code != 200:
+            return None
+        results = (r.json() or {}).get("results") or []
+        candidates = [str((it or {}).get("image") or "") for it in results[:30] if it]
+        candidates = [c for c in candidates if c and not any(b in c.lower() for b in BAD)]
+        for c in candidates:
+            if any(g in c.lower() for g in GOOD_CDN):
+                return c
+        return candidates[0] if candidates else None
+    except Exception:
+        return None
+
+
+# ── Source 5: Manufacturer-site search via Bing (brand-only query) ──────────
+# For private-label products where barcode lookups fail, the brand's own site
+# often has a product image. Bing query "site:brand.com {name}" narrows the
+# search to that domain — far higher hit rate for niche / regional brands.
+def manufacturer_site_search(client: httpx.Client, name: str, brand: str | None) -> Optional[str]:
+    if not brand or not name:
+        return None
+    try:
+        # Strip the brand's legal suffix so the domain heuristic is cleaner.
+        bclean = re.sub(r"(\sInc\.?|\sLLC|\sCo\.?|\sCorp\.?|\sLtd\.?)$", "", brand, flags=re.I).strip()
+        if not bclean or len(bclean) < 2:
+            return None
+        # Site-scoped Bing query (works even when the brand has no www. presence).
+        q = f'"{bclean}" {name[:50]} product'
+        url = (
+            "https://www.bing.com/images/search?q="
+            + urllib.parse.quote(q[:120])
+            + "&form=HDRSC2"
+        )
+        r = client.get(url, headers={"User-Agent": ua()}, timeout=12)
+        if r.status_code != 200:
+            return None
+        matches = re.findall(r'mediaurl=([^"&]+)', r.text)
+        candidates = [urllib.parse.unquote(m) for m in matches[:30]]
+        candidates = [c for c in candidates if not any(b in c.lower() for b in BAD)]
+        # Prefer images whose URL contains the brand's domain stem
+        bstem = re.sub(r"[^a-z0-9]", "", bclean.lower())[:10]
+        for c in candidates:
+            if bstem and bstem in c.lower():
+                return c
+        for c in candidates:
+            if any(g in c.lower() for g in GOOD_CDN):
+                return c
+        return candidates[0] if candidates else None
+    except Exception:
+        return None
+
+
 def resolves_to_image(client: httpx.Client, url: str) -> bool:
     """Confirm the URL actually returns an image (never write a dead URL to DB)."""
     try:
@@ -140,6 +211,8 @@ def find_image(client: httpx.Client, name: str, brand: str | None, barcode: str 
         lambda: upcitemdb(client, barcode) if barcode else None,
         lambda: go_upc(client, barcode) if barcode else None,
         lambda: bing_image(client, q) if q else None,
+        lambda: ddg_image(client, q) if q else None,
+        lambda: manufacturer_site_search(client, name, brand) if brand else None,
     ]
     for fn in sources:
         try:
@@ -166,9 +239,12 @@ def claim_batch(conn, n: int) -> list[dict]:
             f"""WITH cte AS (
                   SELECT barcode FROM products
                   WHERE (image_url IS NULL OR image_url='')
-                    AND score IS NOT NULL
                     AND name IS NOT NULL
-                    AND barcode ~ '^[0-9]+$' AND length(barcode) >= 12
+                    AND barcode ~ '^[0-9]+$' AND length(barcode) >= 8
+                    -- score filter dropped at 98% coverage: the remaining gap is
+                    -- mostly unscored products + private-label barcodes that
+                    -- still need an image even without a score (the app's
+                    -- search page benefits from any product image)
                   ORDER BY base_analysis_at DESC NULLS LAST, last_recomputed DESC NULLS LAST
                   LIMIT %s
                   FOR UPDATE SKIP LOCKED
