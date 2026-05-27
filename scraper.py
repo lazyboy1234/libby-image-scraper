@@ -241,10 +241,9 @@ def claim_batch(conn, n: int) -> list[dict]:
                   WHERE (image_url IS NULL OR image_url='')
                     AND name IS NOT NULL
                     AND barcode ~ '^[0-9]+$' AND length(barcode) >= 8
-                    -- score filter dropped at 98% coverage: the remaining gap is
-                    -- mostly unscored products + private-label barcodes that
-                    -- still need an image even without a score (the app's
-                    -- search page benefits from any product image)
+                    -- score filter dropped at 98pct coverage: remaining gap is
+                    -- mostly unscored / private-label barcodes that still need
+                    -- an image for the search page even without a score
                   ORDER BY base_analysis_at DESC NULLS LAST, last_recomputed DESC NULLS LAST
                   LIMIT %s
                   FOR UPDATE SKIP LOCKED
