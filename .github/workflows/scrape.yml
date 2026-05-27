@@ -9,12 +9,8 @@ on:
     - cron: '*/15 * * * *'   # every 15 minutes
   workflow_dispatch:          # manual trigger button in the GH UI
 
-# Don't queue overlapping runs (a slow run holding the claim sentinel is fine —
-# it self-clears on exit, but no point piling up).
-concurrency:
-  group: scrape
-  cancel-in-progress: false
-
+# No concurrency group — let multiple triggers run in parallel. The atomic
+# claim sentinel + SKIP LOCKED guarantees no shard ever claims the same row.
 jobs:
   scrape:
     runs-on: ubuntu-latest
