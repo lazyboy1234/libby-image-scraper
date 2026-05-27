@@ -17,12 +17,13 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 8
       matrix:
-        # 20 parallel jobs per trigger = 20 fresh IPs concurrently.
-        # Each one is its own runner so they ARE independent.
-        # f1-micro DB cap is ~25 connections; we use 1 per shard (workers share).
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        # 8 parallel jobs per trigger. We tried 20 — Postgres f1-micro deadlocked
+        # under that concurrency (Cloud SQL has ~25 connection cap + each shard
+        # runs FOR UPDATE SKIP LOCKED on big batches → lock contention spiked).
+        # 8 shards × 800 batch = ~6K images per cron wave, still fast enough.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
