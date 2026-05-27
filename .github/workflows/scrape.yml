@@ -34,3 +34,16 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scraper.py --batch 800 --workers 8
+
+  # Keep Render free-tier services from sleeping (15min idle = cold start).
+  # Runs on the same */15 cron as the scrape, but as ONE job (not 20 shards)
+  # so we don't hammer the health endpoints. fail-fast=false on the scrape
+  # job means this still runs even if shards fail.
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: ping liberator-backend
+        run: curl -fsS --max-time 30 https://liberator-backend.onrender.com/health || echo "backend ping failed (non-fatal)"
+      - name: ping kiro-gateway
+        run: curl -fsS --max-time 30 https://liberator-kiro-gw.onrender.com/health || echo "kiro-gw ping failed (non-fatal)"
